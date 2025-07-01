@@ -98,19 +98,19 @@ function getPanelContents() {
   /** @returns {State} */
   function getAngularJsContent(angular) {
     const originalState = angular.element($0).scope();
-    const panelState = clone(originalState);
-    return {panelState, previousPanelState: clone(panelState), originalState};
+    const panelState = cloneWithObservables(originalState);
+    return {panelState, previousPanelState: cloneWithObservables(panelState), originalState};
   }
 
   /** @returns {State} */
   function getAngularContent(ng) {
     const probe = ng.probe($0);
     const originalState = probe.componentInstance;
-    const panelState = clone(originalState);
+    const panelState = cloneWithObservables(originalState);
     addStateProp(panelState, '$context', probe.context);
     addStateProp(panelState, '$debugInfo', probe);
 
-    return {panelState, previousPanelState: clone(panelState), originalState};
+    return {panelState, previousPanelState: cloneWithObservables(panelState), originalState};
   }
 
   /** @returns {State} */
@@ -118,7 +118,7 @@ function getPanelContents() {
     let el = $0;
     const owningComponent = ng.getOwningComponent(el);
     const originalState = ng.getComponent(el) || owningComponent;
-    const panelState = clone(originalState);
+    const panelState = cloneWithObservables(originalState);
 
     if (owningComponent !== originalState) {
       addStateProp(panelState, '$owningComponent', owningComponent);
@@ -127,7 +127,7 @@ function getPanelContents() {
     addStateProp(panelState, '$directives', ng.getDirectives(el));
     addStateProp(panelState, '$listeners', ng.getListeners(el));
 
-    return {panelState, previousPanelState: clone(panelState), originalState};
+    return {panelState, previousPanelState: cloneWithObservables(panelState), originalState};
   }
 
   /**
@@ -262,6 +262,139 @@ function getPanelContents() {
     window.__shortcutsShown__ = true;
   }
 
+  /**
+   * Enhanced clone function that properly handles observables
+   * @param {object} object - Object to clone
+   * @returns {object} - Cloned object with observable values extracted
+   */
+  function cloneWithObservables(object) {
+    if (!object || typeof object !== 'object') {
+      return object;
+    }
+
+    const cloned = Object.create(null);
+    
+    // Get all property names including non-enumerable ones
+    const allProps = Object.getOwnPropertyNames(object);
+    
+    allProps.forEach(prop => {
+      try {
+        const value = object[prop];
+        
+        // Check if it's an observable
+        if (value && typeof value === 'object' && typeof value.subscribe === 'function') {
+          cloned[prop] = extractObservableValue(value, prop);
+        } else if (value && typeof value === 'object' && value.constructor !== Object && !Array.isArray(value)) {
+          // Handle other complex objects (but not plain objects or arrays)
+          cloned[prop] = `[${value.constructor?.name || 'Object'}]`;
+        } else if (typeof value === 'function') {
+          cloned[prop] = `[Function: ${value.name || 'anonymous'}]`;
+        } else {
+          cloned[prop] = value;
+        }
+      } catch (e) {
+        cloned[prop] = `[Error: Cannot access property]`;
+      }
+    });
+
+    return cloned;
+  }
+
+  /**
+   * Extracts the current value from an observable
+   * @param {object} observable - The observable to extract value from
+   * @param {string} propName - Property name for debugging
+   * @returns {object} - Object containing observable info and current value
+   */
+  function extractObservableValue(observable, propName) {
+    const observableInfo = {
+      __type: 'Observable',
+      __observableType: observable.constructor?.name || 'Observable',
+      __propName: propName
+    };
+
+    try {
+      // Method 1: Try to subscribe and get the current value
+      let currentValue = undefined;
+      let hasValue = false;
+      let subscriptionError = null;
+
+      try {
+        const subscription = observable.subscribe({
+          next: (value) => {
+            currentValue = value;
+            hasValue = true;
+          },
+          error: (error) => {
+            subscriptionError = error.message || 'Subscription error';
+          }
+        });
+        
+        // Immediately unsubscribe to avoid side effects
+        if (subscription && typeof subscription.unsubscribe === 'function') {
+          subscription.unsubscribe();
+        }
+      } catch (subscribeError) {
+        subscriptionError = subscribeError.message || 'Failed to subscribe';
+      }
+
+      if (hasValue) {
+        observableInfo.__currentValue = currentValue;
+        observableInfo.__hasValue = true;
+        observableInfo.__accessMethod = 'subscription';
+        
+        // Also try to stringify for better display
+        try {
+          observableInfo.__currentValueJSON = JSON.stringify(currentValue, null, 2);
+        } catch (e) {
+          observableInfo.__currentValueJSON = '[Cannot stringify]';
+        }
+      } else {
+        // Method 2: Fallback to property access for BehaviorSubject/ReplaySubject
+        try {
+          if (observable.value !== undefined) {
+            observableInfo.__currentValue = observable.value;
+            observableInfo.__hasValue = true;
+            observableInfo.__accessMethod = 'property access';
+            observableInfo.__currentValueJSON = JSON.stringify(observable.value, null, 2);
+          } else if (observable._value !== undefined) {
+            observableInfo.__currentValue = observable._value;
+            observableInfo.__hasValue = true;
+            observableInfo.__accessMethod = 'private property access';
+            observableInfo.__currentValueJSON = JSON.stringify(observable._value, null, 2);
+          } else {
+            observableInfo.__hasValue = false;
+            observableInfo.__note = subscriptionError || 'No current value available (cold observable or empty)';
+          }
+        } catch (e) {
+          observableInfo.__hasValue = false;
+          observableInfo.__note = subscriptionError || 'Cannot access observable value';
+        }
+      }
+
+      // Additional observable metadata
+      try {
+        if (observable.closed !== undefined) {
+          observableInfo.__closed = observable.closed;
+        }
+        if (observable.observers && observable.observers.length !== undefined) {
+          observableInfo.__observerCount = observable.observers.length;
+        }
+        if (observable.source) {
+          observableInfo.__sourceType = observable.source.constructor?.name || 'Unknown';
+        }
+      } catch (e) {
+        // Ignore metadata extraction errors
+      }
+
+    } catch (e) {
+      observableInfo.__error = e.message || 'Failed to extract observable info';
+    }
+
+    return observableInfo;
+  }
+
+  // Keep the original clone function as fallback
   function clone(object) {
     return Object.assign(Object.create(null), object);
   }
