@@ -98,7 +98,7 @@ function getPanelContents() {
   /** @returns {State} */
   function getAngularJsContent(angular) {
     const originalState = angular.element($0).scope();
-    const panelState = organizeAngularJsComponent(originalState);
+    const panelState = cloneWithObservables(originalState);
     return {panelState, previousPanelState: cloneWithObservables(panelState), originalState};
   }
 
@@ -106,8 +106,10 @@ function getPanelContents() {
   function getAngularContent(ng) {
     const probe = ng.probe($0);
     const originalState = probe.componentInstance;
-    const panelState = organizeAngularComponent(originalState, probe);
-    
+    const panelState = cloneWithObservables(originalState);
+    addStateProp(panelState, '$context', probe.context);
+    addStateProp(panelState, '$debugInfo', probe);
+
     return {panelState, previousPanelState: cloneWithObservables(panelState), originalState};
   }
 
@@ -116,302 +118,16 @@ function getPanelContents() {
     let el = $0;
     const owningComponent = ng.getOwningComponent(el);
     const originalState = ng.getComponent(el) || owningComponent;
-    const context = ng.getContext(el);
-    const directives = ng.getDirectives(el);
-    const listeners = ng.getListeners(el);
-    
-    const panelState = organizeAngularIvyComponent(originalState, {
-      owningComponent,
-      context,
-      directives,
-      listeners
-    });
+    const panelState = cloneWithObservables(originalState);
+
+    if (owningComponent !== originalState) {
+      addStateProp(panelState, '$owningComponent', owningComponent);
+    }
+    addStateProp(panelState, '$context', ng.getContext(el));
+    addStateProp(panelState, '$directives', ng.getDirectives(el));
+    addStateProp(panelState, '$listeners', ng.getListeners(el));
 
     return {panelState, previousPanelState: cloneWithObservables(panelState), originalState};
-  }
-
-  /**
-   * Organizes Angular Ivy component data into structured sections
-   * @param {object} component - Component instance
-   * @param {object} metadata - Additional metadata
-   * @returns {object} - Organized component data
-   */
-  function organizeAngularIvyComponent(component, metadata) {
-    const organized = {
-      '📋 Component Info': {
-        name: component?.constructor?.name || 'Unknown',
-        type: 'Angular Component (Ivy)',
-        element: $0.tagName?.toLowerCase()
-      },
-      '📥 Inputs': {},
-      '📤 Outputs': {},
-      '🔧 Properties': {},
-      '📊 Observables': {},
-      '🎯 Methods': {},
-      '🔍 Debug Info': {}
-    };
-
-    if (component) {
-      const componentProps = getAllProperties(component);
-      categorizeProperties(componentProps, component, organized);
-    }
-
-    // Add debug information
-    if (metadata.context) {
-      organized['🔍 Debug Info']['$context'] = cloneWithObservables(metadata.context);
-    }
-    if (metadata.directives && metadata.directives.length > 0) {
-      organized['🔍 Debug Info']['$directives'] = metadata.directives.map(d => d.constructor?.name || 'Unknown');
-    }
-    if (metadata.listeners && Object.keys(metadata.listeners).length > 0) {
-      organized['🔍 Debug Info']['$listeners'] = Object.keys(metadata.listeners);
-    }
-    if (metadata.owningComponent && metadata.owningComponent !== component) {
-      organized['🔍 Debug Info']['$owningComponent'] = metadata.owningComponent.constructor?.name || 'Unknown';
-    }
-
-    return organized;
-  }
-
-  /**
-   * Organizes Angular 2+ component data into structured sections
-   * @param {object} component - Component instance
-   * @param {object} probe - Angular probe object
-   * @returns {object} - Organized component data
-   */
-  function organizeAngularComponent(component, probe) {
-    const organized = {
-      '📋 Component Info': {
-        name: component?.constructor?.name || 'Unknown',
-        type: 'Angular Component',
-        element: $0.tagName?.toLowerCase()
-      },
-      '📥 Inputs': {},
-      '📤 Outputs': {},
-      '🔧 Properties': {},
-      '📊 Observables': {},
-      '🎯 Methods': {},
-      '🔍 Debug Info': {}
-    };
-
-    if (component) {
-      const componentProps = getAllProperties(component);
-      categorizeProperties(componentProps, component, organized);
-    }
-
-    // Add debug information
-    if (probe.context) {
-      organized['🔍 Debug Info']['$context'] = cloneWithObservables(probe.context);
-    }
-    organized['🔍 Debug Info']['$debugInfo'] = {
-      componentInstance: component?.constructor?.name || 'Unknown',
-      hasInjector: !!probe.injector,
-      hasChangeDetector: !!(probe._debugInfo || probe.changeDetectorRef)
-    };
-
-    return organized;
-  }
-
-  /**
-   * Organizes AngularJS component data into structured sections
-   * @param {object} scope - AngularJS scope
-   * @returns {object} - Organized scope data
-   */
-  function organizeAngularJsComponent(scope) {
-    const organized = {
-      '📋 Component Info': {
-        name: 'AngularJS Scope',
-        type: 'AngularJS',
-        element: $0.tagName?.toLowerCase(),
-        scopeId: scope.$id
-      },
-      '🔧 Scope Properties': {},
-      '📊 Observables': {},
-      '🎯 Methods': {},
-      '🔍 Debug Info': {}
-    };
-
-    if (scope) {
-      const scopeProps = getAllProperties(scope);
-      categorizeAngularJsProperties(scopeProps, scope, organized);
-    }
-
-    // Add AngularJS specific debug info
-    organized['🔍 Debug Info'] = {
-      $id: scope.$id,
-      $parent: !!scope.$parent,
-      $root: scope === scope.$root,
-      watchers: scope.$$watchers?.length || 0,
-      childScopes: scope.$$childHead ? 'Yes' : 'No'
-    };
-
-    return organized;
-  }
-
-  /**
-   * Categorizes AngularJS properties
-   * @param {string[]} props - Property names
-   * @param {object} scope - AngularJS scope
-   * @param {object} organized - Organized data structure
-   */
-  function categorizeAngularJsProperties(props, scope, organized) {
-    props.forEach(prop => {
-      if (prop.startsWith('$') || prop.startsWith('_')) {
-        return; // Skip Angular internal properties
-      }
-
-      try {
-        const value = scope[prop];
-        
-        if (typeof value === 'function') {
-          organized['🎯 Methods'][prop] = `[Function: ${value.name || 'anonymous'}]`;
-        } else if (isObservable(value)) {
-          organized['📊 Observables'][prop] = extractObservableValue(value, prop);
-        } else {
-          organized['🔧 Scope Properties'][prop] = cloneWithObservables(value);
-        }
-      } catch (e) {
-        organized['🔧 Scope Properties'][prop] = `[Error: Cannot access property]`;
-      }
-    });
-  }
-
-  /**
-   * Categorizes Angular component properties into inputs, outputs, properties, etc.
-   * @param {string[]} props - Property names
-   * @param {object} component - Component instance
-   * @param {object} organized - Organized data structure
-   */
-  function categorizeProperties(props, component, organized) {
-    props.forEach(prop => {
-      if (prop.startsWith('_') || prop === 'constructor') {
-        return; // Skip private and constructor
-      }
-
-      try {
-        const value = component[prop];
-        const category = determinePropertyCategory(prop, value, component);
-        
-        if (category === 'method') {
-          organized['🎯 Methods'][prop] = `[Function: ${value.name || 'anonymous'}]`;
-        } else if (category === 'observable') {
-          organized['📊 Observables'][prop] = extractObservableValue(value, prop);
-        } else if (category === 'input') {
-          organized['📥 Inputs'][prop] = cloneWithObservables(value);
-        } else if (category === 'output') {
-          organized['📤 Outputs'][prop] = formatEventEmitter(value);
-        } else {
-          organized['🔧 Properties'][prop] = cloneWithObservables(value);
-        }
-      } catch (e) {
-        organized['🔧 Properties'][prop] = `[Error: Cannot access property]`;
-      }
-    });
-  }
-
-  /**
-   * Determines the category of a property
-   * @param {string} prop - Property name
-   * @param {any} value - Property value
-   * @param {object} component - Component instance
-   * @returns {string} - Category name
-   */
-  function determinePropertyCategory(prop, value, component) {
-    if (typeof value === 'function') {
-      return 'method';
-    }
-
-    if (isObservable(value)) {
-      return 'observable';
-    }
-
-    if (isEventEmitter(value)) {
-      return 'output';
-    }
-
-    // Check if it's an input by looking at common patterns
-    if (isLikelyInput(prop, value, component)) {
-      return 'input';
-    }
-
-    return 'property';
-  }
-
-  /**
-   * Checks if a property is likely an input
-   * @param {string} prop - Property name
-   * @param {any} value - Property value
-   * @param {object} component - Component instance
-   * @returns {boolean}
-   */
-  function isLikelyInput(prop, value, component) {
-    // Check if the property has a corresponding setter
-    const descriptor = Object.getOwnPropertyDescriptor(component, prop) || 
-                      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(component), prop);
-    
-    if (descriptor && descriptor.set) {
-      return true;
-    }
-
-    // Check for common input naming patterns
-    const inputPatterns = [
-      /^(data|config|options|settings|props)/i,
-      /^(is|has|can|should|will|enable|disable)/i,
-      /^(show|hide|visible|hidden)/i
-    ];
-
-    return inputPatterns.some(pattern => pattern.test(prop));
-  }
-
-  /**
-   * Checks if a value is an Observable
-   * @param {any} value - Value to check
-   * @returns {boolean}
-   */
-  function isObservable(value) {
-    return value && typeof value === 'object' && typeof value.subscribe === 'function';
-  }
-
-  /**
-   * Checks if a value is an EventEmitter
-   * @param {any} value - Value to check
-   * @returns {boolean}
-   */
-  function isEventEmitter(value) {
-    return value && typeof value === 'object' && 
-           typeof value.subscribe === 'function' && 
-           typeof value.emit === 'function';
-  }
-
-  /**
-   * Formats EventEmitter for display
-   * @param {object} emitter - EventEmitter instance
-   * @returns {object}
-   */
-  function formatEventEmitter(emitter) {
-    return {
-      __type: 'EventEmitter',
-      __observerCount: emitter.observers?.length || 0,
-      __closed: emitter.closed || false,
-      __hasEmitMethod: typeof emitter.emit === 'function'
-    };
-  }
-
-  /**
-   * Gets all property names from an object and its prototype chain
-   * @param {object} obj - Object to inspect
-   * @returns {string[]} - Array of property names
-   */
-  function getAllProperties(obj) {
-    const props = new Set();
-    let current = obj;
-    
-    while (current && current !== Object.prototype) {
-      Object.getOwnPropertyNames(current).forEach(prop => props.add(prop));
-      current = Object.getPrototypeOf(current);
-    }
-    
-    return Array.from(props);
   }
 
   /**
@@ -533,7 +249,7 @@ function getPanelContents() {
 
     if (window.__shortcutsShown__) return;
     console.log('\n\n');
-    console.log('%cAngular State Inspector shortcuts:', 'color: #ff5252; font-weight: bold;');
+    console.log('%cAngular state inspector shortcuts:', 'color: #ff5252; font-weight: bold;');
     if (isAngularJs) {
       console.log(`%c  $ctrl: %cComponent $ctrl property`, 'color: #ff5252;', 'color: #1976d2');
     }
@@ -592,9 +308,9 @@ function getPanelContents() {
    */
   function extractObservableValue(observable, propName) {
     const observableInfo = {
-      __type: 'Observable',
-      __observableType: observable.constructor?.name || 'Observable',
-      __propName: propName
+      type: 'Observable',
+      observableType: observable.constructor?.name || 'Observable',
+      propName: propName
     };
 
     try {
@@ -623,47 +339,49 @@ function getPanelContents() {
       }
 
       if (hasValue) {
-        observableInfo.__currentValue = currentValue;
-        observableInfo.__hasValue = true;
-        observableInfo.__accessMethod = 'subscription';
+        observableInfo.currentValue = currentValue;
+        observableInfo.hasValue = true;
+        observableInfo.accessMethod = 'subscription';
+        
+        // Also try to stringify for better display
       } else {
         // Method 2: Fallback to property access for BehaviorSubject/ReplaySubject
         try {
           if (observable.value !== undefined) {
-            observableInfo.__currentValue = observable.value;
-            observableInfo.__hasValue = true;
-            observableInfo.__accessMethod = 'property access';
+            observableInfo.currentValue = observable.value;
+            observableInfo.hasValue = true;
+            observableInfo.accessMethod = 'property access';
           } else if (observable._value !== undefined) {
-            observableInfo.__currentValue = observable._value;
-            observableInfo.__hasValue = true;
-            observableInfo.__accessMethod = 'private property access';
+            observableInfo.currentValue = observable._value;
+            observableInfo.hasValue = true;
+            observableInfo.accessMethod = 'private property access';
           } else {
-            observableInfo.__hasValue = false;
-            observableInfo.__note = subscriptionError || 'No current value available (cold observable or empty)';
+            observableInfo.hasValue = false;
+            observableInfo.note = subscriptionError || 'No current value available (cold observable or empty)';
           }
         } catch (e) {
-          observableInfo.__hasValue = false;
-          observableInfo.__note = subscriptionError || 'Cannot access observable value';
+          observableInfo.hasValue = false;
+          observableInfo.note = subscriptionError || 'Cannot access observable value';
         }
       }
 
       // Additional observable metadata
       try {
         if (observable.closed !== undefined) {
-          observableInfo.__closed = observable.closed;
+          observableInfo.closed = observable.closed;
         }
         if (observable.observers && observable.observers.length !== undefined) {
-          observableInfo.__observerCount = observable.observers.length;
+          observableInfo.observerCount = observable.observers.length;
         }
         if (observable.source) {
-          observableInfo.__sourceType = observable.source.constructor?.name || 'Unknown';
+          observableInfo.sourceType = observable.source.constructor?.name || 'Unknown';
         }
       } catch (e) {
         // Ignore metadata extraction errors
       }
 
     } catch (e) {
-      observableInfo.__error = e.message || 'Failed to extract observable info';
+      observableInfo.error = e.message || 'Failed to extract observable info';
     }
 
     return observableInfo;
